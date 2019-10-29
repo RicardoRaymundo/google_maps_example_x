@@ -1,7 +1,11 @@
 import 'dart:async';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+import 'package:dio/dio.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_map_polyline/google_map_polyline.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:location/location.dart';
@@ -15,15 +19,36 @@ class Main extends StatefulWidget {
 
 class _MainState extends State<Main> {
 
+  BitmapDescriptor bikeIcon;
+
+  @override
+  void initState() {
+    BitmapDescriptor.fromAssetImage(
+        ImageConfiguration(size: Size(.5, .5)), 'assets/bike.jpg')
+        .then((onValue) {
+      this.bikeIcon = onValue;
+    });
+
+    getMyLocation();
+    super.initState();
+  }
+
+  Future<Uint8List> getBytesFromAsset(String path, int width) async {
+    ByteData data = await rootBundle.load(path);
+    ui.Codec codec = await ui.instantiateImageCodec(data.buffer.asUint8List(), targetWidth: width);
+    ui.FrameInfo fi = await codec.getNextFrame();
+    return (await fi.image.toByteData(format: ui.ImageByteFormat.png)).buffer.asUint8List();
+  }
+
   /// Recebe a google API Directions
-  GoogleMapPolyline _googleMapPolyline = GoogleMapPolyline(apiKey: "INSIRA A API KEY");
+  GoogleMapPolyline _googleMapPolyline = GoogleMapPolyline(apiKey: "INSIRA SUA API KEY");
 
   int _polylineCount = 1;
 
   /// Map das polynines que serão registradas
   Map<PolylineId, Polyline> _polylines = <PolylineId, Polyline>{};
 
-  //Polyline patterns
+  /// Polyline patterns
   List<List<PatternItem>> patterns = <List<PatternItem>>[
     <PatternItem>[], //line
     <PatternItem>[PatternItem.dash(30.0), PatternItem.gap(20.0)], //dash
@@ -37,12 +62,13 @@ class _MainState extends State<Main> {
     ],
   ];
 
+  //Variável que recebe os dados da localização do usuário
   LocationData currentLocation;
 
-  /// Localização do usuário
+  /// Variável de localização
   Location location = Location();
 
-  /// Recupera
+  /// Recupera a posição do usuário
   getMyLocation() async {
 
     /// Mensagens da plataforma podem falhar, então é usado um try/catch PlatformException.
@@ -89,41 +115,63 @@ class _MainState extends State<Main> {
 
   /// Adiciona um marker ao Set de marcadores
   void _onAddMarkerButtonPressed() async {
+    final Uint8List markerIcon = await getBytesFromAsset('assets/bike.jpg', 70);
     setState(() {
 
       /// Limpa o set de marcadores e então adiciona um novo, fazendo com que só se tenha um marcador
       /// de _markers no mapa
-      _markers = {};
-      _markers.add(Marker(
+
+      this._markers = {};
+      getAddress(this._lastMapPosition.latitude, this._lastMapPosition.longitude);
+      this._markers.add(Marker(
 
         /// Este id de marcador pode ser qualquer coisa que identifica únicamente cada marcador
-        markerId: MarkerId(_lastMapPosition.toString()),
+        markerId: MarkerId(this._lastMapPosition.toString()),
 
         /// Posição do marcador será a coordenada atual do mapa
         /// Pode-se tambem adicionar manualmente um marcador em uma posição específica, por ex:
         /// LatLng(-23.550897, -46.633149)
-        position: _lastMapPosition,
+        position: this._lastMapPosition,
         infoWindow: InfoWindow(
-
+          
           // Janela com título e descrição do marcador
           title: 'Really cool place',
-          snippet: '5 Star Rating',
+          snippet: this._address,
         ),
         icon: BitmapDescriptor.defaultMarker,
       ));
+
+      /// Marker da localização do usuário
+      this._markers.add(Marker(
+
+        /// Este id de marcador pode ser qualquer coisa que identifica únicamente cada marcador
+        markerId: MarkerId(this._lastUserPosition.toString()),
+
+        /// Posição do marcador será a coordenada atual do mapa
+        /// Pode-se tambem adicionar manualmente um marcador em uma posição específica, por ex:
+        /// LatLng(-23.550897, -46.633149)
+        position: this._lastUserPosition,
+        infoWindow: InfoWindow(
+
+          // Janela com título e descrição do marcador
+          title: 'Really cool biker',
+          snippet: '5 Star Rating',
+        ),
+        icon: BitmapDescriptor.fromBytes(markerIcon),
+      ));
     });
     await _getPolylinesWithLocation();
+    getTravelDistance();
   }
 
   /// Recupera o ponto central do mapa (centro da camera)
   CameraPosition _onCameraMove(CameraPosition position) {
-    _lastMapPosition = position.target;
-
+    this._lastMapPosition = position.target;
   }
 
 
   GoogleMapController _onMapCreated(GoogleMapController controller) {
-    _controller.complete(controller);
+    this._controller.complete(controller);
   }
 
   _getPolylinesWithLocation() async {
@@ -134,7 +182,7 @@ class _MainState extends State<Main> {
         mode: RouteMode.driving);
 
     setState(() {
-      _polylines.clear();
+      this._polylines.clear();
     });
     _addPolyline(_coordinates);
   }
@@ -144,21 +192,53 @@ class _MainState extends State<Main> {
     PolylineId id = PolylineId("poly$_polylineCount");
     Polyline polyline = Polyline(
         polylineId: id,
-        patterns: patterns[0],
+        patterns: this.patterns[0],
         color: Colors.deepOrange,
         points: _coordinates,
         width: 5,
         onTap: () {});
 
     setState(() {
-      _polylines[id] = polyline;
-      _polylineCount++;
+      this._polylines[id] = polyline;
+      this._polylineCount++;
     });
   }
 
+  /// http client
+  Dio dio = Dio();
+
+  getTravelDistance() async {
+    Response response = await dio.get(
+        /// Realizando um http request no google cloud para obter o endereco atravez das coordenadas
+        "https://maps.googleapis.com/maps/api/distancematrix/json?units=metric&origins=${_lastUserPosition
+            .latitude},${_lastUserPosition.longitude}&destinations=${_markers
+            .elementAt(0)
+            .position
+            .latitude}%2C${_markers
+            .elementAt(0)
+            .position
+            .longitude}%7C&key=INSIRA SUA API KEY"
+    );
+    print('TRAVEL DISTANCE--------------------');
+    print(response.data);
+    print('TRAVEL DISTANCE--------------------');
+  }
+
+  List<Placemark> placemark;
+  String _address;
+  Future<String> getAddress(double lat, double lng) async {
+    placemark = await Geolocator().placemarkFromCoordinates(lat, lng);
+    _address = placemark[0].thoroughfare.toString() + ", " + placemark[0].name.toString();
+    print('>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<');
+    print(placemark[0].position);
+    print(placemark[0].administrativeArea);
+    print(placemark[0].country);
+    print(placemark[0].name);
+    print(placemark[0].postalCode);
+    print(placemark[0].thoroughfare);
+  }
   @override
   Widget build(BuildContext context) {
-    getMyLocation();
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       home: Scaffold(
@@ -169,6 +249,7 @@ class _MainState extends State<Main> {
         body: Stack(
           children: <Widget>[
             GoogleMap(
+
               /// Exibe o transito
               trafficEnabled: false,
 
@@ -204,21 +285,22 @@ class _MainState extends State<Main> {
 
               /// Recebe a posição inicial do mapa ao ser carregado
               initialCameraPosition: CameraPosition(
-                target: _lastMapPosition,
+                target: this._lastMapPosition,
                 zoom: 15.0,
               ),
 
               /// Define o tipo de mapa
-              mapType: _currentMapType,
+              mapType: this._currentMapType,
 
               /// Set de marcadores que serão adicionados ao mapa
-              markers: _markers,
+              markers: this._markers,
 
               /// Atualiza a posição de camera
               onCameraMove: _onCameraMove,
 
               /// Rotas do maps
-              polylines: Set<Polyline>.of(_polylines.values),
+              polylines: Set<Polyline>.of(this._polylines.values),
+
             ),
             Padding(
               padding: const EdgeInsets.all(5.0),
